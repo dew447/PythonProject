@@ -10,6 +10,9 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
+# 从你的 cv_ana 里导入这两个（你已经有）
+from cv_ana import extract_cv_features, cv_compare_visual
+
 
 # ================== 基本配置 ==================
 DATA_CSV = "tsne_all.csv"   # 主分析脚本输出的总表（含 tsne / umap）
@@ -39,6 +42,7 @@ def resolve_path(p):
 def preprocess_bw(path, script):
     """
     强制圣书体黑白化，甲骨文轻度二值化。
+    返回 PIL Image（RGB）
     """
     real_path = resolve_path(path)
     img = Image.open(real_path).convert("RGB")
@@ -166,6 +170,107 @@ def build_shape_feature_table(df):
     return group, norm_group
 
 
+# ================== CV 数值对比辅助函数 ==================
+def compute_cv_features_for_image(path, script):
+    """
+    结合当前 preprocess_bw + cv_ana.extract_cv_features:
+    - preprocess_bw → PIL Image (RGB)
+    - 转成灰度 → 阈值 → 0/255 二值数组 → 喂给 extract_cv_features
+    """
+    img = preprocess_bw(path, script)
+    gray = np.array(img.convert("L"))
+    bw = (gray < 128).astype(np.uint8) * 255
+    return bw, extract_cv_features(bw)
+
+
+def compare_features(f_oracle, f_egypt):
+    """
+    根据你在 cv_ana 里的设计，这里假设 extract_cv_features 返回的 dict 至少包含：
+      stroke_density, connected_components, contour_perimeter, contour_area,
+      corner_points, skeleton_length, skeleton_branch_points, hu_moments
+    """
+    diff = {}
+
+    keys = [
+        "stroke_density",
+        "connected_components",
+        "contour_perimeter",
+        "contour_area",
+        "corner_points",
+        "skeleton_length",
+        "skeleton_branch_points",
+    ]
+
+    for k in keys:
+        diff[k] = f_oracle.get(k, 0.0) - f_egypt.get(k, 0.0)
+
+    # Hu Moments 距离
+    hu_o = f_oracle.get("hu_moments", None)
+    hu_e = f_egypt.get("hu_moments", None)
+    if hu_o is not None and hu_e is not None:
+        hu_dist = float(np.linalg.norm(np.array(hu_o) - np.array(hu_e)))
+    else:
+        hu_dist = None
+    diff["hu_distance"] = hu_dist
+
+    return diff
+
+
+def cv_radar_plot(f_oracle, f_egypt, title="CV Radar Comparison"):
+    """
+    CV 特征雷达图（Plotly）
+    """
+    dims = [
+        ("stroke_density", "笔画密度"),
+        ("connected_components", "连通块数"),
+        ("corner_points", "角点数（拐点）"),
+        ("skeleton_branch_points", "骨架分叉数"),
+        ("contour_perimeter", "外轮廓周长"),
+        ("contour_area", "外轮廓面积"),
+    ]
+
+    oracle_vals = [float(f_oracle.get(k, 0.0)) for k, _ in dims]
+    egypt_vals  = [float(f_egypt.get(k, 0.0))  for k, _ in dims]
+
+    all_vals = oracle_vals + egypt_vals
+    min_v = min(all_vals)
+    max_v = max(all_vals)
+    if max_v - min_v < 1e-6:
+        oracle_norm = [0.5] * len(dims)
+        egypt_norm  = [0.5] * len(dims)
+    else:
+        oracle_norm = [(v - min_v) / (max_v - min_v) for v in oracle_vals]
+        egypt_norm  = [(v - min_v) / (max_v - min_v) for v in egypt_vals]
+
+    oracle_norm += [oracle_norm[0]]
+    egypt_norm  += [egypt_norm[0]]
+    labels = [name for _, name in dims] + [dims[0][1]]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=oracle_norm,
+        theta=labels,
+        fill='toself',
+        name='甲骨文',
+        line=dict(color='red')
+    ))
+    fig.add_trace(go.Scatterpolar(
+        r=egypt_norm,
+        theta=labels,
+        fill='toself',
+        name='圣书体',
+        line=dict(color='blue')
+    ))
+    fig.update_layout(
+        title=title,
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+        showlegend=True,
+        width=600,
+        height=600,
+    )
+    return fig
+
+
 # ================== 加载数据 & 特征 ==================
 st.sidebar.title("配置")
 
@@ -179,9 +284,13 @@ labels_all = sorted(df["label"].unique())
 
 
 # ================== Streamlit UI ==================
-st.title("甲骨文 vs 圣书体 · Embedding 可视化（Streamlit）")
+st.title("甲骨文 vs 圣书体 · Embedding & CV 可视化（Streamlit）")
 
-tab_global, tab_single = st.tabs(["🌐 全局散点图", "🔍 单字对比 + 雷达图"])
+tab_global, tab_single, tab_cv = st.tabs([
+    "🌐 全局散点图",
+    "🔍 单字对比 + 结构雷达图",
+    "🧬 CV 字形结构对比"
+])
 
 
 # ---------- Tab 1: 全局散点 ----------
@@ -348,9 +457,6 @@ with tab_single:
         oracle_vals = get_vals("oracle")
         egypt_vals = get_vals("egypt")
 
-        angles = np.linspace(0, 2 * np.pi, len(feat_cols), endpoint=False)
-        angles = np.concatenate([angles, [angles[0]]])
-
         radar_fig = go.Figure()
 
         if oracle_vals is not None:
@@ -382,3 +488,100 @@ with tab_single:
         st.plotly_chart(radar_fig, use_container_width=False)
 
         st.caption("说明：特征已在所有字 / 系统上做 0–1 归一，用于比较“形状”而非绝对量。")
+
+
+# ---------- Tab 3: CV 字形结构对比 ----------
+with tab_cv:
+    st.subheader("CV 字形结构对比（Contour + Skeleton + Hu Moments）")
+
+    selected_label_cv = st.selectbox(
+        "选择一个字（字形结构取首个样本）：",
+        labels_all,
+        key="cv_label"
+    )
+
+    df_o = df[(df.label == selected_label_cv) & (df.script == "oracle")]
+    df_e = df[(df.label == selected_label_cv) & (df.script == "egypt")]
+
+    if df_o.empty or df_e.empty:
+        st.warning("这个字没有同时具备甲骨文与圣书体图像，无法进行 CV 对比。")
+    else:
+        file_o = df_o.iloc[0]["file"]
+        file_e = df_e.iloc[0]["file"]
+
+        # 黑白预处理 + CV 特征
+        bw_o, feats_o = compute_cv_features_for_image(file_o, "oracle")
+        bw_e, feats_e = compute_cv_features_for_image(file_e, "egypt")
+
+        diffs = compare_features(feats_o, feats_e)
+
+        col1, col2 = st.columns([1, 1])
+
+        with col1:
+            st.markdown("### 👁️ 预处理后图像（BW）")
+            st.image(bw_o, caption="Oracle BW", width=250)
+            st.image(bw_e, caption="Egypt BW", width=250)
+
+        with col2:
+            st.markdown("### 📏 CV 数值对比 （甲骨文 - 圣书体）")
+
+            df_show = pd.DataFrame({
+                "指标": [
+                    "笔画密度",
+                    "连通块数",
+                    "外轮廓周长",
+                    "外轮廓面积",
+                    "角点数量",
+                    "骨架长度",
+                    "骨架分叉点数",
+                    "Hu Moments 距离",
+                ],
+                "甲骨文": [
+                    feats_o.get("stroke_density", None),
+                    feats_o.get("connected_components", None),
+                    feats_o.get("contour_perimeter", None),
+                    feats_o.get("contour_area", None),
+                    feats_o.get("corner_points", None),
+                    feats_o.get("skeleton_length", None),
+                    feats_o.get("skeleton_branch_points", None),
+                    None,
+                ],
+                "圣书体": [
+                    feats_e.get("stroke_density", None),
+                    feats_e.get("connected_components", None),
+                    feats_e.get("contour_perimeter", None),
+                    feats_e.get("contour_area", None),
+                    feats_e.get("corner_points", None),
+                    feats_e.get("skeleton_length", None),
+                    feats_e.get("skeleton_branch_points", None),
+                    None,
+                ],
+                "差值(甲-埃)": [
+                    diffs.get("stroke_density", None),
+                    diffs.get("connected_components", None),
+                    diffs.get("contour_perimeter", None),
+                    diffs.get("contour_area", None),
+                    diffs.get("corner_points", None),
+                    diffs.get("skeleton_length", None),
+                    diffs.get("skeleton_branch_points", None),
+                    diffs.get("hu_distance", None),
+                ]
+            })
+
+            st.dataframe(df_show)
+
+        st.markdown("---")
+        st.markdown("### 🕸️ 骨架与结构可视化")
+
+        # 注意：cv_compare_visual 预期的输入应是 0/255 的 bw 图像
+        st.pyplot(cv_compare_visual(bw_o, bw_e))
+
+        st.markdown("---")
+        st.markdown(f"### 🧬 CV 结构雷达图：{selected_label_cv}")
+
+        radar_cv = cv_radar_plot(
+            feats_o,
+            feats_e,
+            title=f"{selected_label_cv} - CV 字形结构雷达图"
+        )
+        st.plotly_chart(radar_cv, use_container_width=False)
