@@ -1,59 +1,150 @@
+# cv_ana.py
 import cv2
 import numpy as np
-from pathlib import Path
-from PIL import Image
-import plotly.graph_objects as go
+from typing import Dict, Any
 
 
-# ===========================
-# 1) 黑白预处理
-# ===========================
-def preprocess_bw(path, script):
+# ======================================================
+# 0. 安全骨架化：没有 ximgproc 也能用
+# ======================================================
+
+def _simple_thinning(binary255: np.ndarray) -> np.ndarray:
     """
-    统一圣书体 / 甲骨文的黑白风格，使 CV 特征可比较
+    Zhang-Suen 细化算法简易实现。
+    输入: 0/255 uint8 图像
+    输出: 0/255 uint8 骨架图像
     """
-    path = Path(path)
-    img = Image.open(path).convert("RGB")
-    gray = np.array(img.convert("L"))
+    img = (binary255 > 0).astype(np.uint8)
+    prev = np.zeros_like(img)
+    rows, cols = img.shape
 
-    if script == "egypt":
-        # 圣书体灰白 → 二值化
-        _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    while True:
+        # 子迭代 1
+        to_remove = []
+        for i in range(1, rows - 1):
+            for j in range(1, cols - 1):
+                P = img[i, j]
+                if P != 1:
+                    continue
+                n = [
+                    img[i-1, j],   # p2
+                    img[i-1, j+1], # p3
+                    img[i,   j+1], # p4
+                    img[i+1, j+1], # p5
+                    img[i+1, j],   # p6
+                    img[i+1, j-1], # p7
+                    img[i,   j-1], # p8
+                    img[i-1, j-1], # p9
+                ]
+                # 黑邻居数量
+                C = sum(n)
+                if C < 2 or C > 6:
+                    continue
+                # 0->1 变化次数
+                transitions = sum((n[k] == 0 and n[(k+1) % 8] == 1) for k in range(8))
+                if transitions != 1:
+                    continue
+                if n[0] * n[2] * n[4] != 0:
+                    continue
+                if n[2] * n[4] * n[6] != 0:
+                    continue
+                to_remove.append((i, j))
+        for (i, j) in to_remove:
+            img[i, j] = 0
+
+        # 子迭代 2
+        to_remove = []
+        for i in range(1, rows - 1):
+            for j in range(1, cols - 1):
+                P = img[i, j]
+                if P != 1:
+                    continue
+                n = [
+                    img[i-1, j],   # p2
+                    img[i-1, j+1], # p3
+                    img[i,   j+1], # p4
+                    img[i+1, j+1], # p5
+                    img[i+1, j],   # p6
+                    img[i+1, j-1], # p7
+                    img[i,   j-1], # p8
+                    img[i-1, j-1], # p9
+                ]
+                C = sum(n)
+                if C < 2 or C > 6:
+                    continue
+                transitions = sum((n[k] == 0 and n[(k+1) % 8] == 1) for k in range(8))
+                if transitions != 1:
+                    continue
+                if n[0] * n[2] * n[6] != 0:
+                    continue
+                if n[0] * n[4] * n[6] != 0:
+                    continue
+                to_remove.append((i, j))
+        for (i, j) in to_remove:
+            img[i, j] = 0
+
+        if np.array_equal(img, prev):
+            break
+        prev = img.copy()
+
+    return (img * 255).astype(np.uint8)
+
+
+def thinning(binary255: np.ndarray) -> np.ndarray:
+    """
+    封装统一的骨架化接口：
+    - 如果环境支持 ximgproc，就用它
+    - 否则使用 _simple_thinning
+    """
+    # 尝试用 ximgproc，如果没有就走 fallback
+    if hasattr(cv2, "ximgproc") and hasattr(cv2.ximgproc, "thinning"):
+        return cv2.ximgproc.thinning(binary255)
     else:
-        # 甲骨文刻痕 → 轻二值化
-        _, bw = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-
-    # 保持黑为笔画
-    if bw.mean() < 127:
-        bw = 255 - bw
-
-    return bw
+        return _simple_thinning(binary255)
 
 
-# ===========================
-# 2) CV 特征提取
-# ===========================
-def extract_cv_features(bw_img):
+# ======================================================
+# 1. 结构特征提取（传入二值图像）
+# ======================================================
+
+def extract_cv_features(bw_img: np.ndarray) -> Dict[str, Any]:
     """
-    输入：二值图（0=黑，255=白）
-    输出：结构化字形特征
+    输入:
+        bw_img: 0/255 或 0~255 的 2D numpy 数组 (uint8)
+    输出:
+        dict 包含：
+          - stroke_density
+          - connected_components
+          - contour_perimeter
+          - contour_area
+          - corner_points
+          - skeleton_length
+          - skeleton_branch_points
+          - hu_moments (7维 numpy array)
     """
+    if bw_img.ndim != 2:
+        raise ValueError("extract_cv_features 需要 2D 灰度/二值图像")
 
-    # ---- Binary 0/1 ----
-    binary = (bw_img < 128).astype(np.uint8)
+    # 统一为 0/255
+    if bw_img.max() <= 1:
+        bw = (bw_img * 255).astype(np.uint8)
+    else:
+        bw = bw_img.astype(np.uint8)
 
-    # ---- Connected Components (连通块) ----
-    num_labels, _ = cv2.connectedComponents((binary * 255).astype(np.uint8))
-    comp_count = num_labels - 1
+    binary = (bw > 0).astype(np.uint8)
 
-    # ---- Stroke Density（黑像素密度）----
-    stroke_density = binary.mean()
+    h, w = binary.shape
+    total_pixels = h * w
 
-    # ---- Contours (外轮廓) ----
-    contours, _ = cv2.findContours((binary * 255).astype(np.uint8),
-                                   cv2.RETR_EXTERNAL,
-                                   cv2.CHAIN_APPROX_SIMPLE)
+    # 1) 笔画密度
+    stroke_density = float(binary.sum() / total_pixels) if total_pixels > 0 else 0.0
 
+    # 2) 连通块数（不含背景）
+    num_labels, _ = cv2.connectedComponents(bw)
+    connected_components = int(max(num_labels - 1, 0))
+
+    # 3) 外轮廓
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if len(contours) == 0:
         perimeter = 0.0
         area = 0.0
@@ -63,171 +154,89 @@ def extract_cv_features(bw_img):
         perimeter = float(cv2.arcLength(cnt, True))
         area = float(cv2.contourArea(cnt))
 
-        # Corner detection（粗略笔画数量 proxy）
-        epsilon = 0.01 * perimeter
+        epsilon = 0.01 * perimeter if perimeter > 0 else 0.01
         approx = cv2.approxPolyDP(cnt, epsilon, True)
-        corners = len(approx)
+        corners = int(len(approx))
 
-    # ---- Skeleton（骨架）----
-    skeleton = cv2.ximgproc.thinning((binary * 255).astype(np.uint8))
-    skel_points = np.column_stack(np.where(skeleton == 255))
-    skel_len = len(skel_points)
+    # 4) 骨架
+    skeleton = thinning(bw)
+    skel_points = np.column_stack(np.where(skeleton > 0))
+    skeleton_length = int(len(skel_points))
 
-    # ---- Skeleton branch detection ----
-    branch_pts = 0
-    for y, x in skel_points:
-        # Count skeleton neighbors
-        neighbors = skeleton[max(0,y-1):y+2, max(0,x-1):x+2]
-        count = np.count_nonzero(neighbors) - 1
-        if count >= 3:  # >=3 neighbors → branch point
-            branch_pts += 1
+    # 骨架分叉点数（>=3 邻居）
+    skeleton_branch_points = 0
+    for (y, x) in skel_points:
+        y0 = max(0, y-1)
+        y1 = min(h, y+2)
+        x0 = max(0, x-1)
+        x1 = min(w, x+2)
+        neighbors = skeleton[y0:y1, x0:x1]
+        count = int(np.count_nonzero(neighbors) - 1)  # exclude self
+        if count >= 3:
+            skeleton_branch_points += 1
 
-    # ---- Hu Moments（七大不变矩） ----
-    moments = cv2.moments((binary * 255).astype(np.uint8))
+    # 5) Hu Moments（不变矩）
+    moments = cv2.moments(bw)
     hu = cv2.HuMoments(moments).flatten()
-    hu = np.sign(hu) * np.log10(np.abs(hu) + 1e-12)  # log transform
+    # log transform 方便比较
+    hu = np.sign(hu) * np.log10(np.abs(hu) + 1e-12)
 
     return {
         "stroke_density": stroke_density,
-        "connected_components": comp_count,
+        "connected_components": connected_components,
         "contour_perimeter": perimeter,
         "contour_area": area,
         "corner_points": corners,
-        "skeleton_length": skel_len,
-        "skeleton_branch_points": branch_pts,
+        "skeleton_length": skeleton_length,
+        "skeleton_branch_points": skeleton_branch_points,
         "hu_moments": hu,
     }
 
 
-# ===========================
-# 3) CV 特征对比
-# ===========================
-def compare_features(f_oracle, f_egypt):
+# ======================================================
+# 2. 可视化：骨架对比
+# ======================================================
+
+def cv_compare_visual(bw_oracle: np.ndarray, bw_egypt: np.ndarray):
     """
-    计算数值差异，包括 Hu Moments 距离
+    输入:
+        bw_oracle, bw_egypt: 0/255 的二值图 (numpy 数组)
+    输出:
+        matplotlib 的 figure 对象（给 streamlit.pyplot 用）
     """
-    diff = {}
-
-    # scalar features
-    keys = [
-        "stroke_density",
-        "connected_components",
-        "contour_perimeter",
-        "contour_area",
-        "corner_points",
-        "skeleton_length",
-        "skeleton_branch_points",
-    ]
-
-    for k in keys:
-        diff[k] = f_oracle[k] - f_egypt[k]
-
-    # Hu Moments 距离
-    hu_dist = np.linalg.norm(f_oracle["hu_moments"] - f_egypt["hu_moments"])
-    diff["hu_distance"] = float(hu_dist)
-
-    return diff
-
-
-# ===========================
-# 4) 生成 CV 雷达图（Plotly）
-# ===========================
-def cv_radar_plot(f_oracle, f_egypt, title="CV Radar Comparison"):
-    """
-    输入：两个特征 dict
-    输出：Plotly 雷达图 figure
-    """
-
-    # 选择可归一比较的标量特征：
-    dims = [
-        ("stroke_density", "笔画密度"),
-        ("connected_components", "连通块数"),
-        ("corner_points", "角点数（笔画拐点）"),
-        ("skeleton_branch_points", "骨架分叉数"),
-        ("contour_perimeter", "外轮廓周长"),
-        ("contour_area", "外轮廓面积"),
-    ]
-
-    oracle_vals = [f_oracle[k] for k, _ in dims]
-    egypt_vals  = [f_egypt[k] for k, _ in dims]
-
-    # 归一化到 0-1
-    all_vals = oracle_vals + egypt_vals
-    min_v = min(all_vals)
-    max_v = max(all_vals)
-    if max_v - min_v < 1e-6:
-        oracle_norm = [0.5]*len(dims)
-        egypt_norm  = [0.5]*len(dims)
-    else:
-        oracle_norm = [(v-min_v)/(max_v-min_v) for v in oracle_vals]
-        egypt_norm  = [(v-min_v)/(max_v-min_v) for v in egypt_vals]
-
-    # 闭合
-    oracle_norm += [oracle_norm[0]]
-    egypt_norm  += [egypt_norm[0]]
-    labels = [name for _, name in dims] + [dims[0][1]]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=oracle_norm,
-        theta=labels,
-        fill='toself',
-        name='甲骨文',
-        line=dict(color='red')
-    ))
-    fig.add_trace(go.Scatterpolar(
-        r=egypt_norm,
-        theta=labels,
-        fill='toself',
-        name='圣书体',
-        line=dict(color='blue')
-    ))
-    fig.update_layout(
-        title=title,
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-        showlegend=True,
-        width=600,
-        height=600,
-    )
-    return fig
-
-
-# ===========================
-# 5) 可视化：骨架、轮廓（可保存）
-# ===========================
-def cv_compare_visual(bw_oracle, bw_egypt, save_path=None):
-    """
-    输出：一个包含轮廓 + 骨架并排的可视化图
-    """
-
     import matplotlib.pyplot as plt
+
+    # 同样保证 0/255
+    if bw_oracle.max() <= 1:
+        bw_o = (bw_oracle * 255).astype(np.uint8)
+    else:
+        bw_o = bw_oracle.astype(np.uint8)
+
+    if bw_egypt.max() <= 1:
+        bw_e = (bw_egypt * 255).astype(np.uint8)
+    else:
+        bw_e = bw_egypt.astype(np.uint8)
+
+    skel_o = thinning(bw_o)
+    skel_e = thinning(bw_e)
 
     fig, axes = plt.subplots(2, 2, figsize=(8, 8))
 
-    axes[0,0].imshow(bw_oracle, cmap='gray')
-    axes[0,0].set_title("Oracle (BW)")
-    axes[0,0].axis("off")
+    axes[0, 0].imshow(bw_o, cmap="gray")
+    axes[0, 0].set_title("Oracle BW")
+    axes[0, 0].axis("off")
 
-    axes[0,1].imshow(bw_egypt, cmap='gray')
-    axes[0,1].set_title("Egypt (BW)")
-    axes[0,1].axis("off")
+    axes[0, 1].imshow(bw_e, cmap="gray")
+    axes[0, 1].set_title("Egypt BW")
+    axes[0, 1].axis("off")
 
-    # Skeleton 可视化
-    skel_o = cv2.ximgproc.thinning((bw_oracle < 128).astype(np.uint8)*255)
-    skel_e = cv2.ximgproc.thinning((bw_egypt < 128).astype(np.uint8)*255)
+    axes[1, 0].imshow(skel_o, cmap="gray")
+    axes[1, 0].set_title("Oracle Skeleton")
+    axes[1, 0].axis("off")
 
-    axes[1,0].imshow(skel_o, cmap='gray')
-    axes[1,0].set_title("Oracle Skeleton")
-    axes[1,0].axis("off")
-
-    axes[1,1].imshow(skel_e, cmap='gray')
-    axes[1,1].set_title("Egypt Skeleton")
-    axes[1,1].axis("off")
+    axes[1, 1].imshow(skel_e, cmap="gray")
+    axes[1, 1].set_title("Egypt Skeleton")
+    axes[1, 1].axis("off")
 
     plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=300)
-        plt.close()
-
     return fig

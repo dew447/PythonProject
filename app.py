@@ -491,97 +491,145 @@ with tab_single:
 
 
 # ---------- Tab 3: CV 字形结构对比 ----------
+# ---------- Tab 3: CV 字形结构对比 ----------
 with tab_cv:
-    st.subheader("CV 字形结构对比（Contour + Skeleton + Hu Moments）")
+    st.subheader("🧬 CV 字形结构对比：自由选择甲骨文 & 圣书体图像")
 
+    # 选择字
     selected_label_cv = st.selectbox(
-        "选择一个字（字形结构取首个样本）：",
+        "选择一个（字形类别）：",
         labels_all,
         key="cv_label"
     )
 
+    # 获取该字的全部甲骨文 + 圣书体样本
     df_o = df[(df.label == selected_label_cv) & (df.script == "oracle")]
     df_e = df[(df.label == selected_label_cv) & (df.script == "egypt")]
 
-    if df_o.empty or df_e.empty:
-        st.warning("这个字没有同时具备甲骨文与圣书体图像，无法进行 CV 对比。")
-    else:
-        file_o = df_o.iloc[0]["file"]
-        file_e = df_e.iloc[0]["file"]
+    if df_o.empty:
+        st.error("⚠ 这个字没有甲骨文图像。")
+        st.stop()
 
-        # 黑白预处理 + CV 特征
-        bw_o, feats_o = compute_cv_features_for_image(file_o, "oracle")
-        bw_e, feats_e = compute_cv_features_for_image(file_e, "egypt")
+    if df_e.empty:
+        st.error("⚠ 这个字没有圣书体图像。")
+        st.stop()
 
-        diffs = compare_features(feats_o, feats_e)
+    # ==== 下拉：选择甲骨文的具体图像 ====
+    st.markdown("### 🔴 选择甲骨文图像")
+    oracle_options = df_o["file"].tolist()
 
-        col1, col2 = st.columns([1, 1])
+    selected_oracle_file = st.selectbox(
+        "选择甲骨文文件：",
+        oracle_options,
+        index=0,
+        key="select_oracle_image"
+    )
 
-        with col1:
-            st.markdown("### 👁️ 预处理后图像（BW）")
-            st.image(bw_o, caption="Oracle BW", width=250)
-            st.image(bw_e, caption="Egypt BW", width=250)
+    # ==== 下拉：选择圣书体的具体图像 ====
+    st.markdown("### 🔵 选择圣书体图像")
+    egypt_options = df_e["file"].tolist()
 
-        with col2:
-            st.markdown("### 📏 CV 数值对比 （甲骨文 - 圣书体）")
+    selected_egypt_file = st.selectbox(
+        "选择圣书体文件：",
+        egypt_options,
+        index=0,
+        key="select_egypt_image"
+    )
 
-            df_show = pd.DataFrame({
-                "指标": [
-                    "笔画密度",
-                    "连通块数",
-                    "外轮廓周长",
-                    "外轮廓面积",
-                    "角点数量",
-                    "骨架长度",
-                    "骨架分叉点数",
-                    "Hu Moments 距离",
-                ],
-                "甲骨文": [
-                    feats_o.get("stroke_density", None),
-                    feats_o.get("connected_components", None),
-                    feats_o.get("contour_perimeter", None),
-                    feats_o.get("contour_area", None),
-                    feats_o.get("corner_points", None),
-                    feats_o.get("skeleton_length", None),
-                    feats_o.get("skeleton_branch_points", None),
-                    None,
-                ],
-                "圣书体": [
-                    feats_e.get("stroke_density", None),
-                    feats_e.get("connected_components", None),
-                    feats_e.get("contour_perimeter", None),
-                    feats_e.get("contour_area", None),
-                    feats_e.get("corner_points", None),
-                    feats_e.get("skeleton_length", None),
-                    feats_e.get("skeleton_branch_points", None),
-                    None,
-                ],
-                "差值(甲-埃)": [
-                    diffs.get("stroke_density", None),
-                    diffs.get("connected_components", None),
-                    diffs.get("contour_perimeter", None),
-                    diffs.get("contour_area", None),
-                    diffs.get("corner_points", None),
-                    diffs.get("skeleton_length", None),
-                    diffs.get("skeleton_branch_points", None),
-                    diffs.get("hu_distance", None),
-                ]
-            })
+    # ======== 计算 CV 特征 ========
+    bw_o, feats_o = compute_cv_features_for_image(selected_oracle_file, "oracle")
+    bw_e, feats_e = compute_cv_features_for_image(selected_egypt_file, "egypt")
 
-            st.dataframe(df_show)
+    if bw_o is None or feats_o is None:
+        st.error(f"❌ 无法读取甲骨文图像：{resolve_path(selected_oracle_file)}")
+        st.stop()
 
-        st.markdown("---")
-        st.markdown("### 🕸️ 骨架与结构可视化")
+    if bw_e is None or feats_e is None:
+        st.error(f"❌ 无法读取圣书体图像：{resolve_path(selected_egypt_file)}")
+        st.stop()
 
-        # 注意：cv_compare_visual 预期的输入应是 0/255 的 bw 图像
-        st.pyplot(cv_compare_visual(bw_o, bw_e))
+    diffs = compare_features(feats_o, feats_e)
 
-        st.markdown("---")
-        st.markdown(f"### 🧬 CV 结构雷达图：{selected_label_cv}")
+    # ======== 显示当前选中的文件路径 ========
+    st.markdown("### 📂 当前对比的文件")
+    st.write("甲骨文：", resolve_path(selected_oracle_file))
+    st.write("圣书体：", resolve_path(selected_egypt_file))
 
-        radar_cv = cv_radar_plot(
-            feats_o,
-            feats_e,
-            title=f"{selected_label_cv} - CV 字形结构雷达图"
-        )
-        st.plotly_chart(radar_cv, use_container_width=False)
+    # ======== 图片预览 ========
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.markdown("### 🔴 甲骨文（预处理后）")
+        st.image(bw_o, width=250)
+
+    with col2:
+        st.markdown("### 🔵 圣书体（预处理后）")
+        st.image(bw_e, width=250)
+
+    st.markdown("---")
+
+    # ======== CV 数值对比表 ========
+    st.markdown("### 📏 CV 数值对比（甲骨文 - 圣书体）")
+
+    df_show = pd.DataFrame({
+        "指标": [
+            "笔画密度",
+            "连通块数",
+            "外轮廓周长",
+            "外轮廓面积",
+            "角点数量",
+            "骨架长度",
+            "骨架分叉点数",
+            "Hu Moments 距离",
+        ],
+        "甲骨文": [
+            feats_o.get("stroke_density"),
+            feats_o.get("connected_components"),
+            feats_o.get("contour_perimeter"),
+            feats_o.get("contour_area"),
+            feats_o.get("corner_points"),
+            feats_o.get("skeleton_length"),
+            feats_o.get("skeleton_branch_points"),
+            None,
+        ],
+        "圣书体": [
+            feats_e.get("stroke_density"),
+            feats_e.get("connected_components"),
+            feats_e.get("contour_perimeter"),
+            feats_e.get("contour_area"),
+            feats_e.get("corner_points"),
+            feats_e.get("skeleton_length"),
+            feats_e.get("skeleton_branch_points"),
+            None,
+        ],
+        "差值(甲 - 埃)": [
+            diffs.get("stroke_density"),
+            diffs.get("connected_components"),
+            diffs.get("contour_perimeter"),
+            diffs.get("contour_area"),
+            diffs.get("corner_points"),
+            diffs.get("skeleton_length"),
+            diffs.get("skeleton_branch_points"),
+            diffs.get("hu_distance"),
+        ]
+    })
+
+    st.dataframe(df_show)
+
+    st.markdown("---")
+
+    # ======== 骨架与轮廓可视化 ========
+    st.markdown("### 🕸️ 骨架 + 轮廓结构可视化")
+    st.pyplot(cv_compare_visual(bw_o, bw_e))
+
+    st.markdown("---")
+
+    # ======== CV 雷达图 ========
+    st.markdown(f"### 📊 CV 多维结构雷达图：{selected_label_cv}")
+
+    radar_cv = cv_radar_plot(
+        feats_o,
+        feats_e,
+        title=f"{selected_label_cv} - CV 字形结构雷达图"
+    )
+    st.plotly_chart(radar_cv, use_container_width=False)
+
