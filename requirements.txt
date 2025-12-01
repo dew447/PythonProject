@@ -1,21 +1,15 @@
 streamlit==1.31.1
 plotly==5.18.0
 
-numpy==1.26.4
-pandas==2.2.0
-Pillow==10.2.0
 
-opencv-python-headless==4.8.0.74
+scikit-learn
+scipy
 
-scikit-learn==1.3.2
-scipy==1.11.4
+umap-learn
+openTSNE
 
-umap-learn==0.5.5
-openTSNE==1.0.1
+matplotlib
 
-matplotlib==3.8.2
-
-python-pptx==0.6.21
-
-tqdm==4.66.1
-protobuf==4.25.1
+opencv
+tqdm
+protobuf
