@@ -9,6 +9,8 @@ import cv2
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import time
+
 
 # 从你的 cv_ana 里导入这两个（你已经有）
 from cv_ana import extract_cv_features, cv_compare_visual
@@ -274,6 +276,14 @@ def cv_radar_plot(f_oracle, f_egypt, title="CV Radar Comparison"):
 # ================== 加载数据 & 特征 ==================
 st.sidebar.title("配置")
 
+
+mode = st.sidebar.radio(
+    "选择模式：",
+    ["🎮 小游戏", "📊 分析"],
+    index=0
+)
+
+
 with st.spinner("加载数据中..."):
     df = load_data()
 
@@ -285,351 +295,472 @@ labels_all = sorted(df["label"].unique())
 
 # ================== Streamlit UI ==================
 st.title("甲骨文 vs 圣书体 · Embedding & CV 可视化（Streamlit）")
-
-tab_global, tab_single, tab_cv = st.tabs([
-    "🌐 全局散点图",
-    "🔍 单字对比 + 结构雷达图",
-    "🧬 CV 字形结构对比"
-])
-
-
-# ---------- Tab 1: 全局散点 ----------
-with tab_global:
-    st.subheader("全局 UMAP / t-SNE")
-
-    projection = st.radio(
-        "选择降维方式：",
-        ["UMAP", "t-SNE"],
-        horizontal=True,
-        key="global_proj"
-    )
-
-    color_mode = st.radio(
-        "颜色编码：",
-        ["按 script 着色（oracle vs egypt）", "按 label 着色（不同字不同颜色）"],
-        horizontal=False,
-        key="global_color"
-    )
-
-    if projection == "UMAP":
-        x_col, y_col = "umap_x", "umap_y"
-    else:
-        x_col, y_col = "tsne_x", "tsne_y"
-
-    if color_mode.startswith("按 script"):
-        color_col = "script"
-        color_map = {"oracle": "red", "egypt": "blue"}
-        fig = px.scatter(
-            df,
-            x=x_col,
-            y=y_col,
-            color=color_col,
-            color_discrete_map=color_map,
-            hover_data=["file", "label", "script", "gardiner_code"],
-            title=f"全局 {projection}: 甲骨文 vs 圣书体"
-        )
-    else:
-        color_col = "label"
-        fig = px.scatter(
-            df,
-            x=x_col,
-            y=y_col,
-            color=color_col,
-            hover_data=["file", "label", "script", "gardiner_code"],
-            title=f"全局 {projection}: 按字着色"
-        )
-
-    fig.update_layout(
-        width=700,
-        height=700,
-        legend_title_text=color_col
-    )
-    # 保持 1:1 比例，防止拉伸
-    fig.update_yaxes(scaleanchor="x", scaleratio=1)
-
-    st.plotly_chart(fig, use_container_width=False)
+if mode == "📊 分析":
+    tab_global, tab_single, tab_cv = st.tabs([
+        "🌐 全局散点图",
+        "🔍 单字对比 + 结构雷达图",
+        "🧬 CV 字形结构对比",
+    ])
 
 
-# ---------- Tab 2: 单字对比 + 雷达图 ----------
-with tab_single:
-    st.subheader("单字：甲骨文 vs 圣书体 对比")
+    # ---------- Tab 1: 全局散点 ----------
+    with tab_global:
+        st.subheader("全局 UMAP / t-SNE")
 
-    c1, c2 = st.columns([1, 2])
-
-    with c1:
-        selected_label = st.selectbox(
-            "选择一个字：",
-            labels_all,
-            index=labels_all.index("鬼") if "鬼" in labels_all else 0
-        )
-
-        proj = st.radio(
-            "降维方式：",
+        projection = st.radio(
+            "选择降维方式：",
             ["UMAP", "t-SNE"],
             horizontal=True,
-            key="single_proj"
+            key="global_proj"
         )
 
-        show_all_points = st.checkbox(
-            "把其它字也显示出来（淡色背景）",
-            value=False
+        color_mode = st.radio(
+            "颜色编码：",
+            ["按 script 着色（oracle vs egypt）", "按 label 着色（不同字不同颜色）"],
+            horizontal=False,
+            key="global_color"
         )
 
-    sub = df[df["label"] == selected_label]
-
-    if proj == "UMAP":
-        x_col, y_col = "umap_x", "umap_y"
-    else:
-        x_col, y_col = "tsne_x", "tsne_y"
-
-    with c2:
-        st.markdown(f"### {selected_label} 的 {proj} 散点图（甲骨文 vs 圣书体）")
-
-        if show_all_points:
-            base = df
-            base_color = base["script"].map({"oracle": "rgba(255,0,0,0.15)",
-                                             "egypt": "rgba(0,0,255,0.15)"})
-            # 先画淡色背景
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(
-                x=base[x_col],
-                y=base[y_col],
-                mode="markers",
-                marker=dict(color=base_color, size=4),
-                showlegend=False,
-                hoverinfo="skip"
-            ))
+        if projection == "UMAP":
+            x_col, y_col = "umap_x", "umap_y"
         else:
-            fig2 = go.Figure()
+            x_col, y_col = "tsne_x", "tsne_y"
 
-        # 再画当前字，红=oracle 蓝=egypt
-        for script_name, color in [("oracle", "red"), ("egypt", "blue")]:
-            sub_s = sub[sub["script"] == script_name]
-            if len(sub_s) == 0:
-                continue
-            fig2.add_trace(go.Scatter(
-                x=sub_s[x_col],
-                y=sub_s[y_col],
-                mode="markers",
-                marker=dict(color=color, size=10),
-                name=script_name,
-                text=sub_s["file"],
-                hovertemplate="(%{x}, %{y})<br>%{text}<extra></extra>"
-            ))
+        if color_mode.startswith("按 script"):
+            color_col = "script"
+            color_map = {"oracle": "red", "egypt": "blue"}
+            fig = px.scatter(
+                df,
+                x=x_col,
+                y=y_col,
+                color=color_col,
+                color_discrete_map=color_map,
+                hover_data=["file", "label", "script", "gardiner_code"],
+                title=f"全局 {projection}: 甲骨文 vs 圣书体"
+            )
+        else:
+            color_col = "label"
+            fig = px.scatter(
+                df,
+                x=x_col,
+                y=y_col,
+                color=color_col,
+                hover_data=["file", "label", "script", "gardiner_code"],
+                title=f"全局 {projection}: 按字着色"
+            )
 
-        fig2.update_layout(
-            title=f"{selected_label} - {proj}: 甲骨文 (red) vs 圣书体 (blue)",
+        fig.update_layout(
             width=700,
             height=700,
-            xaxis_title=x_col,
-            yaxis_title=y_col,
+            legend_title_text=color_col
         )
-        fig2.update_yaxes(scaleanchor="x", scaleratio=1)
+        # 保持 1:1 比例，防止拉伸
+        fig.update_yaxes(scaleanchor="x", scaleratio=1)
 
-        st.plotly_chart(fig2, use_container_width=False)
-
-    st.markdown("---")
-
-    # ====== 雷达图区域 ======
-    st.markdown(f"### {selected_label} 的结构特征雷达图（甲骨文 vs 圣书体）")
-
-    feat_cols = [
-        "stroke_density",
-        "vertical_symmetry",
-        "horizontal_symmetry",
-        "centralization",
-        "component_count",
-    ]
-    feat_names_cn = ["笔画密度", "竖对称", "横对称", "中心集中度", "连通块数"]
-
-    sub_norm = norm_group[norm_group["label"] == selected_label]
-
-    if sub_norm.empty:
-        st.info("这个字没有结构特征数据（可能没有对应图片）。")
-    else:
-        def get_vals(script):
-            row = sub_norm[sub_norm["script"] == script]
-            if row.empty:
-                return None
-            vals = [row.iloc[0][c] for c in feat_cols]
-            return vals + [vals[0]]
-
-        oracle_vals = get_vals("oracle")
-        egypt_vals = get_vals("egypt")
-
-        radar_fig = go.Figure()
-
-        if oracle_vals is not None:
-            radar_fig.add_trace(go.Scatterpolar(
-                r=oracle_vals,
-                theta=feat_names_cn + [feat_names_cn[0]],
-                fill="toself",
-                name="甲骨文",
-                line=dict(color="red"),
-            ))
-
-        if egypt_vals is not None:
-            radar_fig.add_trace(go.Scatterpolar(
-                r=egypt_vals,
-                theta=feat_names_cn + [feat_names_cn[0]],
-                fill="toself",
-                name="圣书体",
-                line=dict(color="blue"),
-            ))
-
-        radar_fig.update_layout(
-            title=f"{selected_label} - 结构特征雷达图",
-            polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-            showlegend=True,
-            width=600,
-            height=600,
-        )
-
-        st.plotly_chart(radar_fig, use_container_width=False)
-
-        st.caption("说明：特征已在所有字 / 系统上做 0–1 归一，用于比较“形状”而非绝对量。")
+        st.plotly_chart(fig, use_container_width=False)
 
 
-# ---------- Tab 3: CV 字形结构对比 ----------
-# ---------- Tab 3: CV 字形结构对比 ----------
-with tab_cv:
-    st.subheader("🧬 CV 字形结构对比：自由选择甲骨文 & 圣书体图像")
+    # ---------- Tab 2: 单字对比 + 雷达图 ----------
+    with tab_single:
+        st.subheader("单字：甲骨文 vs 圣书体 对比")
 
-    # 选择字
-    selected_label_cv = st.selectbox(
-        "选择一个（字形类别）：",
-        labels_all,
-        key="cv_label"
-    )
+        c1, c2 = st.columns([1, 2])
 
-    # 获取该字的全部甲骨文 + 圣书体样本
-    df_o = df[(df.label == selected_label_cv) & (df.script == "oracle")]
-    df_e = df[(df.label == selected_label_cv) & (df.script == "egypt")]
+        with c1:
+            selected_label = st.selectbox(
+                "选择一个字：",
+                labels_all,
+                index=labels_all.index("鬼") if "鬼" in labels_all else 0
+            )
 
-    if df_o.empty:
-        st.error("⚠ 这个字没有甲骨文图像。")
-        st.stop()
+            proj = st.radio(
+                "降维方式：",
+                ["UMAP", "t-SNE"],
+                horizontal=True,
+                key="single_proj"
+            )
 
-    if df_e.empty:
-        st.error("⚠ 这个字没有圣书体图像。")
-        st.stop()
+            show_all_points = st.checkbox(
+                "把其它字也显示出来（淡色背景）",
+                value=False
+            )
 
-    # ==== 下拉：选择甲骨文的具体图像 ====
-    st.markdown("### 🔴 选择甲骨文图像")
-    oracle_options = df_o["file"].tolist()
+        sub = df[df["label"] == selected_label]
 
-    selected_oracle_file = st.selectbox(
-        "选择甲骨文文件：",
-        oracle_options,
-        index=0,
-        key="select_oracle_image"
-    )
+        if proj == "UMAP":
+            x_col, y_col = "umap_x", "umap_y"
+        else:
+            x_col, y_col = "tsne_x", "tsne_y"
 
-    # ==== 下拉：选择圣书体的具体图像 ====
-    st.markdown("### 🔵 选择圣书体图像")
-    egypt_options = df_e["file"].tolist()
+        with c2:
+            st.markdown(f"### {selected_label} 的 {proj} 散点图（甲骨文 vs 圣书体）")
 
-    selected_egypt_file = st.selectbox(
-        "选择圣书体文件：",
-        egypt_options,
-        index=0,
-        key="select_egypt_image"
-    )
+            if show_all_points:
+                base = df
+                base_color = base["script"].map({"oracle": "rgba(255,0,0,0.15)",
+                                                 "egypt": "rgba(0,0,255,0.15)"})
+                # 先画淡色背景
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(
+                    x=base[x_col],
+                    y=base[y_col],
+                    mode="markers",
+                    marker=dict(color=base_color, size=4),
+                    showlegend=False,
+                    hoverinfo="skip"
+                ))
+            else:
+                fig2 = go.Figure()
 
-    # ======== 计算 CV 特征 ========
-    bw_o, feats_o = compute_cv_features_for_image(selected_oracle_file, "oracle")
-    bw_e, feats_e = compute_cv_features_for_image(selected_egypt_file, "egypt")
+            # 再画当前字，红=oracle 蓝=egypt
+            for script_name, color in [("oracle", "red"), ("egypt", "blue")]:
+                sub_s = sub[sub["script"] == script_name]
+                if len(sub_s) == 0:
+                    continue
+                fig2.add_trace(go.Scatter(
+                    x=sub_s[x_col],
+                    y=sub_s[y_col],
+                    mode="markers",
+                    marker=dict(color=color, size=10),
+                    name=script_name,
+                    text=sub_s["file"],
+                    hovertemplate="(%{x}, %{y})<br>%{text}<extra></extra>"
+                ))
 
-    if bw_o is None or feats_o is None:
-        st.error(f"❌ 无法读取甲骨文图像：{resolve_path(selected_oracle_file)}")
-        st.stop()
+            fig2.update_layout(
+                title=f"{selected_label} - {proj}: 甲骨文 (red) vs 圣书体 (blue)",
+                width=700,
+                height=700,
+                xaxis_title=x_col,
+                yaxis_title=y_col,
+            )
+            fig2.update_yaxes(scaleanchor="x", scaleratio=1)
 
-    if bw_e is None or feats_e is None:
-        st.error(f"❌ 无法读取圣书体图像：{resolve_path(selected_egypt_file)}")
-        st.stop()
+            st.plotly_chart(fig2, use_container_width=False)
 
-    diffs = compare_features(feats_o, feats_e)
+        st.markdown("---")
 
-    # ======== 显示当前选中的文件路径 ========
-    st.markdown("### 📂 当前对比的文件")
-    st.write("甲骨文：", resolve_path(selected_oracle_file))
-    st.write("圣书体：", resolve_path(selected_egypt_file))
+        # ====== 雷达图区域 ======
+        st.markdown(f"### {selected_label} 的结构特征雷达图（甲骨文 vs 圣书体）")
 
-    # ======== 图片预览 ========
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.markdown("### 🔴 甲骨文（预处理后）")
-        st.image(bw_o, width=250)
-
-    with col2:
-        st.markdown("### 🔵 圣书体（预处理后）")
-        st.image(bw_e, width=250)
-
-    st.markdown("---")
-
-    # ======== CV 数值对比表 ========
-    st.markdown("### 📏 CV 数值对比（甲骨文 - 圣书体）")
-
-    df_show = pd.DataFrame({
-        "指标": [
-            "笔画密度",
-            "连通块数",
-            "外轮廓周长",
-            "外轮廓面积",
-            "角点数量",
-            "骨架长度",
-            "骨架分叉点数",
-            "Hu Moments 距离",
-        ],
-        "甲骨文": [
-            feats_o.get("stroke_density"),
-            feats_o.get("connected_components"),
-            feats_o.get("contour_perimeter"),
-            feats_o.get("contour_area"),
-            feats_o.get("corner_points"),
-            feats_o.get("skeleton_length"),
-            feats_o.get("skeleton_branch_points"),
-            None,
-        ],
-        "圣书体": [
-            feats_e.get("stroke_density"),
-            feats_e.get("connected_components"),
-            feats_e.get("contour_perimeter"),
-            feats_e.get("contour_area"),
-            feats_e.get("corner_points"),
-            feats_e.get("skeleton_length"),
-            feats_e.get("skeleton_branch_points"),
-            None,
-        ],
-        "差值(甲 - 埃)": [
-            diffs.get("stroke_density"),
-            diffs.get("connected_components"),
-            diffs.get("contour_perimeter"),
-            diffs.get("contour_area"),
-            diffs.get("corner_points"),
-            diffs.get("skeleton_length"),
-            diffs.get("skeleton_branch_points"),
-            diffs.get("hu_distance"),
+        feat_cols = [
+            "stroke_density",
+            "vertical_symmetry",
+            "horizontal_symmetry",
+            "centralization",
+            "component_count",
         ]
-    })
+        feat_names_cn = ["笔画密度", "竖对称", "横对称", "中心集中度", "连通块数"]
 
-    st.dataframe(df_show)
+        sub_norm = norm_group[norm_group["label"] == selected_label]
 
-    st.markdown("---")
+        if sub_norm.empty:
+            st.info("这个字没有结构特征数据（可能没有对应图片）。")
+        else:
+            def get_vals(script):
+                row = sub_norm[sub_norm["script"] == script]
+                if row.empty:
+                    return None
+                vals = [row.iloc[0][c] for c in feat_cols]
+                return vals + [vals[0]]
 
-    # ======== 骨架与轮廓可视化 ========
-    st.markdown("### 🕸️ 骨架 + 轮廓结构可视化")
-    st.pyplot(cv_compare_visual(bw_o, bw_e))
+            oracle_vals = get_vals("oracle")
+            egypt_vals = get_vals("egypt")
 
-    st.markdown("---")
+            radar_fig = go.Figure()
 
-    # ======== CV 雷达图 ========
-    st.markdown(f"### 📊 CV 多维结构雷达图：{selected_label_cv}")
+            if oracle_vals is not None:
+                radar_fig.add_trace(go.Scatterpolar(
+                    r=oracle_vals,
+                    theta=feat_names_cn + [feat_names_cn[0]],
+                    fill="toself",
+                    name="甲骨文",
+                    line=dict(color="red"),
+                ))
 
-    radar_cv = cv_radar_plot(
-        feats_o,
-        feats_e,
-        title=f"{selected_label_cv} - CV 字形结构雷达图"
+            if egypt_vals is not None:
+                radar_fig.add_trace(go.Scatterpolar(
+                    r=egypt_vals,
+                    theta=feat_names_cn + [feat_names_cn[0]],
+                    fill="toself",
+                    name="圣书体",
+                    line=dict(color="blue"),
+                ))
+
+            radar_fig.update_layout(
+                title=f"{selected_label} - 结构特征雷达图",
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                showlegend=True,
+                width=600,
+                height=600,
+            )
+
+            st.plotly_chart(radar_fig, use_container_width=False)
+
+            st.caption("说明：特征已在所有字 / 系统上做 0–1 归一，用于比较“形状”而非绝对量。")
+
+
+    # ---------- Tab 3: CV 字形结构对比 ----------
+    # ---------- Tab 3: CV 字形结构对比 ----------
+    with tab_cv:
+        st.subheader("🧬 CV 字形结构对比：自由选择甲骨文 & 圣书体图像")
+
+        # 选择字
+        selected_label_cv = st.selectbox(
+            "选择一个（字形类别）：",
+            labels_all,
+            key="cv_label"
+        )
+
+        # 获取该字的全部甲骨文 + 圣书体样本
+        df_o = df[(df.label == selected_label_cv) & (df.script == "oracle")]
+        df_e = df[(df.label == selected_label_cv) & (df.script == "egypt")]
+
+        if df_o.empty:
+            st.error("⚠ 这个字没有甲骨文图像。")
+            st.stop()
+
+        if df_e.empty:
+            st.error("⚠ 这个字没有圣书体图像。")
+            st.stop()
+
+        # ==== 下拉：选择甲骨文的具体图像 ====
+        st.markdown("### 🔴 选择甲骨文图像")
+        oracle_options = df_o["file"].tolist()
+
+        selected_oracle_file = st.selectbox(
+            "选择甲骨文文件：",
+            oracle_options,
+            index=0,
+            key="select_oracle_image"
+        )
+
+        # ==== 下拉：选择圣书体的具体图像 ====
+        st.markdown("### 🔵 选择圣书体图像")
+        egypt_options = df_e["file"].tolist()
+
+        selected_egypt_file = st.selectbox(
+            "选择圣书体文件：",
+            egypt_options,
+            index=0,
+            key="select_egypt_image"
+        )
+
+        # ======== 计算 CV 特征 ========
+        bw_o, feats_o = compute_cv_features_for_image(selected_oracle_file, "oracle")
+        bw_e, feats_e = compute_cv_features_for_image(selected_egypt_file, "egypt")
+
+        if bw_o is None or feats_o is None:
+            st.error(f"❌ 无法读取甲骨文图像：{resolve_path(selected_oracle_file)}")
+            st.stop()
+
+        if bw_e is None or feats_e is None:
+            st.error(f"❌ 无法读取圣书体图像：{resolve_path(selected_egypt_file)}")
+            st.stop()
+
+        diffs = compare_features(feats_o, feats_e)
+
+        # ======== 显示当前选中的文件路径 ========
+        st.markdown("### 📂 当前对比的文件")
+        st.write("甲骨文：", resolve_path(selected_oracle_file))
+        st.write("圣书体：", resolve_path(selected_egypt_file))
+
+        # ======== 图片预览 ========
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown("### 🔴 甲骨文（预处理后）")
+            st.image(bw_o, width=250)
+
+        with col2:
+            st.markdown("### 🔵 圣书体（预处理后）")
+            st.image(bw_e, width=250)
+
+        st.markdown("---")
+
+        # ======== CV 数值对比表 ========
+        st.markdown("### 📏 CV 数值对比（甲骨文 - 圣书体）")
+
+        df_show = pd.DataFrame({
+            "指标": [
+                "笔画密度",
+                "连通块数",
+                "外轮廓周长",
+                "外轮廓面积",
+                "角点数量",
+                "骨架长度",
+                "骨架分叉点数",
+                "Hu Moments 距离",
+            ],
+            "甲骨文": [
+                feats_o.get("stroke_density"),
+                feats_o.get("connected_components"),
+                feats_o.get("contour_perimeter"),
+                feats_o.get("contour_area"),
+                feats_o.get("corner_points"),
+                feats_o.get("skeleton_length"),
+                feats_o.get("skeleton_branch_points"),
+                None,
+            ],
+            "圣书体": [
+                feats_e.get("stroke_density"),
+                feats_e.get("connected_components"),
+                feats_e.get("contour_perimeter"),
+                feats_e.get("contour_area"),
+                feats_e.get("corner_points"),
+                feats_e.get("skeleton_length"),
+                feats_e.get("skeleton_branch_points"),
+                None,
+            ],
+            "差值(甲 - 埃)": [
+                diffs.get("stroke_density"),
+                diffs.get("connected_components"),
+                diffs.get("contour_perimeter"),
+                diffs.get("contour_area"),
+                diffs.get("corner_points"),
+                diffs.get("skeleton_length"),
+                diffs.get("skeleton_branch_points"),
+                diffs.get("hu_distance"),
+            ]
+        })
+
+        st.dataframe(df_show)
+
+        st.markdown("---")
+
+        # ======== 骨架与轮廓可视化 ========
+        st.markdown("### 🕸️ 骨架 + 轮廓结构可视化")
+        st.pyplot(cv_compare_visual(bw_o, bw_e))
+
+        st.markdown("---")
+
+        # ======== CV 雷达图 ========
+        st.markdown(f"### 📊 CV 多维结构雷达图：{selected_label_cv}")
+
+        radar_cv = cv_radar_plot(
+            feats_o,
+            feats_e,
+            title=f"{selected_label_cv} - CV 字形结构雷达图"
+        )
+        st.plotly_chart(radar_cv, use_container_width=False)
+else:
+
+    # =============== 🎮 小游戏：2 分钟限时猜字 ===============
+    st.subheader("🎮 猜字小游戏：2 分钟挑战")
+
+    st.markdown(
+        "规则：\n"
+        "- 系统会随机抽一张甲骨文或圣书体图片；\n"
+        "- 你从下拉框中选择你认为的“字”；\n"
+        "- 点【提交答案】后会告诉你对错，并立刻出下一题；\n"
+        "- 总时长 2 分钟，看看你能答对几题！"
     )
-    st.plotly_chart(radar_cv, use_container_width=False)
 
+    # ---- 初始化游戏状态 ----
+    if "game_start_ts" not in st.session_state:
+        st.session_state.game_start_ts = None  # 游戏开始时间戳
+    if "quiz_row_idx" not in st.session_state:
+        st.session_state.quiz_row_idx = None  # 当前题目的 df 行索引
+    if "quiz_score" not in st.session_state:
+        st.session_state.quiz_score = 0  # 答对数量
+    if "quiz_total" not in st.session_state:
+        st.session_state.quiz_total = 0  # 作答总题数
+
+
+    # ---- 工具函数：出新题 ----
+    def new_question():
+        row = df.sample(1).iloc[0]
+        st.session_state.quiz_row_idx = int(row.name)
+
+
+    # ---- 开始 / 重置 按钮 ----
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🚀 开始 / 重新开始 2 分钟挑战"):
+            st.session_state.game_start_ts = time.time()
+            st.session_state.quiz_score = 0
+            st.session_state.quiz_total = 0
+            new_question()
+            st.rerun()  # 立刻刷新显示第一题
+
+    # ---- 当前是否在游戏中？ ----
+    if st.session_state.game_start_ts is None:
+        st.info("点击上面的 **🚀 开始 / 重新开始 2 分钟挑战** 按钮开始游戏。")
+    else:
+        elapsed = time.time() - st.session_state.game_start_ts
+        remaining = int(120 - elapsed)
+
+        if remaining <= 0:
+            # 时间用完
+            st.error("⏰ 时间到！2 分钟已结束。")
+            st.write(f"本轮成绩：**{st.session_state.quiz_score} / {st.session_state.quiz_total}**")
+            st.info("可以点击上方按钮重新开始一轮挑战。")
+        else:
+            # 显示倒计时 + 成绩
+            st.markdown(f"⏱ 剩余时间：**{remaining} 秒**")
+            st.markdown(
+                f"当前成绩：✅ **{st.session_state.quiz_score}** / "
+                f"📝 **{st.session_state.quiz_total}** 题"
+            )
+
+            # 如果当前还没有题目，出一题
+            if st.session_state.quiz_row_idx is None:
+                new_question()
+
+            # 使用当前题目的索引
+            row = df.loc[st.session_state.quiz_row_idx]
+
+            # 显示图片
+            img_path = resolve_path(row["file"])
+            try:
+                img = Image.open(img_path).convert("RGB")
+                st.image(
+                    img,
+                    caption=f"脚本: {row['script']}（oracle=甲骨文 / egypt=圣书体）",
+                    width=260
+                )
+            except Exception as e:
+                st.error(f"图片读取失败：{img_path}")
+                st.stop()
+
+            st.markdown("#### 你觉得这是哪个字？")
+
+            guess = st.selectbox(
+                "请选择你的答案：",
+                labels_all,
+                key="quiz_guess"
+            )
+
+            # 提交答案按钮（在时间内可用）
+            if st.button("✅ 提交答案"):
+                correct_label = str(row["label"])
+                st.session_state.quiz_total += 1
+
+                if str(guess) == correct_label:
+                    st.session_state.quiz_score += 1
+                    st.success(f"🎉 回答正确！这是 **{correct_label}**。")
+                else:
+                    st.error(f"😅 不太对。你的答案：{guess}，正确答案：**{correct_label}**。")
+
+                # 额外信息
+                extra = [f"脚本：`{row['script']}`"]
+                if "gardiner_code" in df.columns and not pd.isna(row.get("gardiner_code", None)):
+                    extra.append(f"Gardiner Code：`{row['gardiner_code']}`")
+                st.markdown("，".join(extra))
+
+                # 英文含义（有的话）
+                meaning_map = {
+                    "日": "sun / solar disk",
+                    "月": "moon",
+                    "星": "star",
+                    "人": "human / person",
+                    "帝": "supreme deity / high god",
+                    "鬼": "ghost / spirit",
+                    "祖": "ancestor spirit",
+                    "示": "altar / shrine",
+                }
+                if correct_label in meaning_map:
+                    st.markdown(f"**含义提示：** {meaning_map[correct_label]}")
+
+                # 换下一题，然后强制 rerun，让图片立刻更新
+                new_question()
+                st.rerun()
