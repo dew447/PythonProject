@@ -1,7 +1,6 @@
 streamlit==1.31.1
 plotly==5.18.0
 
-cv2
 
 scikit-learn
 scipy
@@ -11,6 +10,7 @@ openTSNE
 
 matplotlib
 
-opencv-python
+scikit-image
+
 tqdm
 protobuf

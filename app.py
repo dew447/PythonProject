@@ -4,7 +4,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from PIL import Image
-import cv2
+from skimage.filters import threshold_otsu
+from skimage.measure import label as cc_label
+
 
 import streamlit as st
 import plotly.express as px
@@ -51,14 +53,20 @@ def preprocess_bw(path, script):
     gray = np.array(img.convert("L"))
 
     if script == "egypt":
-        _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # 用 skimage 的 Otsu 自动阈值
+        th = threshold_otsu(gray)
     else:
-        _, bw = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        # 固定阈值 200，和原来逻辑一致
+        th = 200
 
+    bw = (gray >= th).astype(np.uint8) * 255
+
+    # 前景统一为黑色：如果整体偏黑，就反色
     if bw.mean() < 127:
         bw = 255 - bw
 
     return Image.fromarray(bw).convert("RGB")
+
 
 
 # ================== 形状特征（雷达图用） ==================
@@ -66,6 +74,7 @@ def compute_shape_features_from_array(gray_arr):
     h, w = gray_arr.shape
     total_pixels = h * w
 
+    # 前景：黑色像素
     binary = (gray_arr < 128).astype(np.uint8)
 
     # 1. 笔画密度
@@ -108,10 +117,13 @@ def compute_shape_features_from_array(gray_arr):
         else:
             centralization = 0.0
 
-    # 5. 连通块数量（0~1 归一）
-    cc_img = (binary * 255).astype(np.uint8)
-    num_labels, _ = cv2.connectedComponents(cc_img)
-    comp_count = max(num_labels - 1, 0)
+    # 5. 连通块数量（0~1 归一），不用 cv2，改用 skimage
+    if stroke_pixels == 0:
+        comp_count = 0
+    else:
+        labels = cc_label(binary, connectivity=2)
+        comp_count = int(labels.max())  # 背景是 0，前景标签从 1 开始
+
     max_comp_assumed = 6
     comp_norm = min(comp_count, max_comp_assumed) / max_comp_assumed
 
@@ -122,6 +134,7 @@ def compute_shape_features_from_array(gray_arr):
         "centralization": float(centralization),
         "component_count": float(comp_norm),
     }
+
 
 
 def compute_shape_features_for_image(path, script):
