@@ -31,11 +31,9 @@ st.set_page_config(
 
 # ================== 路径修正函数 ==================
 def resolve_path(p):
-    """
-    把 CSV 里的路径转换成绝对路径：
-    - 如果本身就是绝对路径，直接用
-    - 如果是相对路径，则认为是相对于 PROJECT_ROOT
-    """
+    # 强制把 CSV 中的 Windows 路径 \ 换成 /
+    p = str(p).replace("\\", "/")
+
     p = Path(p)
     if p.is_absolute():
         return p
