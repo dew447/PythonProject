@@ -1,0 +1,15 @@
+streamlit==1.31.1
+plotly==5.18.0
+
+
+scikit-learn
+scipy
+
+umap-learn
+openTSNE
+
+matplotlib
+
+opencv-python
+tqdm
+protobuf
