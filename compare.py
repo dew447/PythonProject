@@ -21,11 +21,11 @@ plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
 
 
 # ================= 配置 =================
-ORACLE_ROOT = "oracle_selected_glyphs"   # 甲骨文目录
-EGYPT_ROOT  = "egypt_by_oracle"          # 圣书体目录
+ORACLE_ROOT = "oracle_selected_glyphs"   # 甲骨文字形目录
+EGYPT_ROOT  = "egypt_by_oracle"          # 圣书体字形目录
 
 EMB_PATH = "embeddings_all.npy"          # 保存所有向量
-CSV_PATH = "dataset_all.csv"             # 保存所有样本信息
+CSV_PATH = "dataset_all.csv"             # 保存所有样本元信息
 
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -34,9 +34,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ================= 工具：解析圣书体文件名 =================
 def parse_egypt_filename(fname: str):
     """
-    期望格式: 鬼_G29_001.png
+    期望文件名格式: 鬼_G29_001.png
     返回: (汉字, Gardiner code, index)
-    如果格式不标准，就兜底：char=第一个字符, code='NA', index=0
+    若格式不符合约定，则退化为:
+        char = 第一个字符, code = 'NA', index = 0
     """
     stem = Path(fname).stem
     parts = stem.split("_")
@@ -55,24 +56,24 @@ def parse_egypt_filename(fname: str):
 # ================= 图像黑白预处理 =================
 def preprocess_bw_for_script(fpath, script):
     """
-    根据脚本类型返回一个尽量纯黑白的 PIL.Image(RGB)
-    - 圣书体 egypt: 使用 Otsu 强二值化
-    - 甲骨文 oracle: 使用较高固定阈值做轻度二值（你也可以改成直接返回原图）
+    针对脚本类型进行统一的黑白化处理，返回 PIL.Image(RGB)：
+      - 圣书体 egypt: 使用 Otsu 做强二值化
+      - 甲骨文 oracle: 使用较高固定阈值做轻度二值化
     """
     pil_img = Image.open(fpath).convert("RGB")
     gray = np.array(pil_img.convert("L"))
 
     if script == "egypt":
-        # Otsu 自动阈值，强二值
+        # Otsu 自动阈值
         _, bw = cv2.threshold(
             gray, 0, 255,
             cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
     else:
-        # 甲骨文一般已经比较黑白，这里做一个轻量二值
+        # 甲骨文一般已接近黑白，此处做轻量阈值
         _, bw = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
 
-    # 保证背景白、笔画黑
+    # 保证背景为白、笔画为黑
     if bw.mean() < 127:
         bw = 255 - bw
 
@@ -89,8 +90,8 @@ def load_oracle_images(root_dir):
                 yyy.png
             卜/
                 ...
-    label = 中文文件夹名
-    gardiner_code 统一设为 "NA"
+    label 取中文子目录名，
+    gardiner_code 统一设为 "NA"。
     """
     rows = []
     root = Path(root_dir)
@@ -98,7 +99,7 @@ def load_oracle_images(root_dir):
     for char_dir in sorted(root.iterdir()):
         if not char_dir.is_dir():
             continue
-        label = char_dir.name  # 汉字
+        label = char_dir.name
         idx = 1
         for f in sorted(char_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg"):
@@ -117,7 +118,7 @@ def load_oracle_images(root_dir):
 # ================= 读取圣书体 =================
 def load_egypt_images(root_dir):
     """
-    圣书体目录结构类似：
+    圣书体目录结构示例：
         egypt_by_oracle/
             鬼/
                 G29/
@@ -126,7 +127,6 @@ def load_egypt_images(root_dir):
                     鬼_G25_001.png
             占/
                 ...
-        或者有直接在中文目录下的图片：鬼_NA_01.png 等
     """
     rows = []
     root = Path(root_dir)
@@ -151,7 +151,7 @@ def load_egypt_images(root_dir):
 # ================= CLIP Embedding =================
 def compute_embeddings(df):
     """
-    所有图片在送进 CLIP 前都先走 preprocess_bw_for_script 做黑白风格统一。
+    所有图片在送入 CLIP 前先经过 preprocess_bw_for_script，进行黑白风格统一。
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, preprocess = clip.load("ViT-B/32", device=device)
@@ -199,14 +199,14 @@ def run_tsne(emb):
 # ================= 简单散点图（无图片叠加） =================
 def simple_scatter(df, x, y, outpath, title, color_col="label"):
     """
-    纯散点图，不叠图像，颜色根据 color_col（默认 label）。
+    绘制简单散点图，不叠加原始图像。
+    点颜色由 color_col 控制（默认按 label 区分）。
     """
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.set_title(title)
 
     values = df[color_col].astype(str).unique()
 
-    # 这里用新的 colormap API，避免 DeprecationWarning
     cmap = plt.colormaps.get("tab20")
     color_map = {v: cmap(i % cmap.N) for i, v in enumerate(values)}
     colors = df[color_col].astype(str).map(color_map)
@@ -216,7 +216,7 @@ def simple_scatter(df, x, y, outpath, title, color_col="label"):
     ax.set_xlabel(x)
     ax.set_ylabel(y)
 
-    # 简单 legend（只显示前 15 个，避免太挤）
+    # 只显示前若干条 legend，避免过度拥挤
     handles = []
     labels = []
     for v in values[:15]:
@@ -234,12 +234,11 @@ def simple_scatter(df, x, y, outpath, title, color_col="label"):
 
 def generate_global_scatter_plots(df):
     """
-    生成：
-      - UMAP / t-SNE：
-          1) 只甲骨文
-          2) 只圣书体
-          3) 两者一起
-      颜色按 label（字）区分
+    生成以下散点图（UMAP / t-SNE）：
+      1) 仅甲骨文
+      2) 仅圣书体
+      3) 甲骨文 + 圣书体
+    颜色按 label 区分。
     """
     df_oracle = df[df["script"] == "oracle"]
     df_egypt  = df[df["script"] == "egypt"]
@@ -301,11 +300,10 @@ def generate_global_scatter_plots(df):
 # ================= 甲骨文 vs 圣书体 相似度分析 =================
 def compare_oracle_egypt(emb, df, out_csv):
     """
-    对每个 label：
-      - 求 oracle 的 centroid
-      - 求 egypt 下每个 gardiner_code 的 centroid
-      - 计算两者余弦相似度
-    输出到 CSV。
+    对每个 label 进行比较：
+      - 计算 oracle 向量的 centroid
+      - 计算 egypt 下整体 centroid 以及各 Gardiner code 的 centroid
+      - 计算上述 centroid 与 oracle centroid 的余弦相似度
     """
     rows = []
 
@@ -334,7 +332,7 @@ def compare_oracle_egypt(emb, df, out_csv):
             "cosine_distance": 1 - sim_all
         })
 
-        # 分 code
+        # 按 Gardiner code 细分
         for code, sub in df[(df["label"] == label) & (df["script"] == "egypt")].groupby("gardiner_code"):
             idxs = sub.index
             egypt_centroid_code = emb[idxs].mean(axis=0)
@@ -354,7 +352,7 @@ def compare_oracle_egypt(emb, df, out_csv):
 
     out_df = pd.DataFrame(rows)
     out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
-    print("[INFO] 甲骨文 vs 圣书体 相似度表 已输出:", out_csv)
+    print("[INFO] 甲骨文 vs 圣书体 相似度结果已写入:", out_csv)
 
 
 # ================= 主流程 =================
@@ -363,17 +361,17 @@ def main():
     df_oracle = load_oracle_images(ORACLE_ROOT)
     df_egypt  = load_egypt_images(EGYPT_ROOT)
 
-    print("[INFO] 甲骨文图片数:", len(df_oracle))
-    print("[INFO] 圣书体图片数:", len(df_egypt))
+    print("[INFO] 甲骨文图片数量:", len(df_oracle))
+    print("[INFO] 圣书体图片数量:", len(df_egypt))
 
     df = pd.concat([df_oracle, df_egypt], ignore_index=True)
-    print("[INFO] 总图片数:", len(df))
+    print("[INFO] 总图片数量:", len(df))
 
     # 2. 计算 embedding
     emb = compute_embeddings(df)
     np.save(EMB_PATH, emb)
     df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
-    print("[INFO] 向量 & 数据集已保存")
+    print("[INFO] 向量与数据集元信息已保存")
 
     # 3. UMAP & t-SNE
     print("[INFO] 运行 UMAP ...")
@@ -399,7 +397,7 @@ def main():
         out_csv=os.path.join(OUTPUT_DIR, "oracle_vs_egypt_similarity.csv")
     )
 
-    print("[DONE] 所有任务完成，图像与数据已输出在 outputs/ 目录中。")
+    print("[DONE] 处理完成，图像与数据已输出至 outputs/ 目录。")
 
 
 if __name__ == "__main__":
